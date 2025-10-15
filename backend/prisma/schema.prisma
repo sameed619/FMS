@@ -1,0 +1,233 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 2. Generator block - No empty line between the datasource block and this one
+generator client {
+  provider = "prisma-client-js"
+}
+model Inventory {
+  id               Int       @id @default(autoincrement())
+  itemId           String    @unique @db.VarChar(10)
+  itemType         ItemType
+  name             String    @db.VarChar(100)
+  stockQty         Int       @default(0)
+  unit             String    @db.VarChar(20)
+  supplier         String    @db.VarChar(100)
+  lastPurchaseDate DateTime  @default(now())
+  billNumber       String?   @db.VarChar(50)
+  pricePerUnit     Float     @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  purchaseDetails    PurchaseItem[] 
+  recipeMaterials RecipeMaterial[] 
+  productionItems ProductionItem[]
+  @@map("Inventory")
+}
+enum ItemType {
+  Fabric
+  Thread
+}
+
+// File: prisma/schema.prisma (Add this block)
+
+model Purchase {
+  id                Int       @id @default(autoincrement())
+  purchaseId        String    @unique @db.VarChar(50) 
+  supplier          String    @db.VarChar(100)
+  billNumber        String    @db.VarChar(50)
+  totalAmount       Float
+  contact           String?   // Changed to String as numbers might have leading zeros or special chars, but Int is also fine if strict
+  purchaseDate      DateTime  @default(now())
+  // --- Relationship to PurchaseItem (one-to-many) ---
+  items             PurchaseItem[]
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@map("Purchase")
+}
+
+model PurchaseItem {
+  id                Int       @id @default(autoincrement())
+
+  // --- Relationship to Purchase (Many-to-One) ---
+  purchaseId        Int       // Foreign key to the Purchase header
+  purchase          Purchase  @relation(fields: [purchaseId], references: [id])
+
+  // --- ✅ Primary Foreign Key (Integer) ---
+  inventoryId       Int       // FK to Inventory.id
+  inventoryItem     Inventory @relation(fields: [inventoryId], references: [id]) // RELATING TO INVENTORY.ID
+  
+  // Maps to items.qty
+  qty               Int
+  
+  // Maps to items.pricePerUnit
+  pricePerUnit      Float
+  
+  createdAt         DateTime  @default(now())
+
+  @@map("PurchaseItem")
+  @@index([purchaseId, inventoryId])
+}
+
+model Machine {
+  // Primary Key
+  id               Int                @id @default(autoincrement())
+
+  // Machine Details
+  modelName        String             @unique  // e.g., 'Juki DDL-8700'
+  capacity         Int                @default(0) // units/hour or equivalent
+  location         String?            // e.g., 'Sewing Bay 3'
+  purchaseDate     DateTime?
+  
+  // NEW FIELDS ADDED:
+  status           String             @default("Operational") // Operational, Maintenance, Offline
+  notes            String?            // Any specific notes about the machine
+
+  // Relationships (Linking to Transaction/Log Data)
+  productionOrders ProductionOrder[]
+  machineLogs      MachineLog[]
+}
+
+
+model ProductRecipe {
+  // Primary Key
+  id               Int      @id @default(autoincrement())
+
+  // Core Product Specs
+  designCode       String   @unique // The primary identifier for the product, e.g., 'SHIRT-P001'
+  name             String
+  description      String?
+
+  // Production Specifications (From your data: Number of stitches, Front/back details)
+  stitchesRequired Int      // e.g., total stitches required
+  frontDetail      String?
+  backDetail       String?
+
+  // Relationships (Linking to Materials and Execution)
+  // Links to the list of materials required for ONE unit of this product
+  requiredMaterials RecipeMaterial[] 
+
+  // Links to the actual jobs that use this recipe
+  productionOrders  ProductionOrder[]
+}
+
+model RecipeMaterial {
+  recipeId          Int
+  inventoryId       Int // Sahi Field 1: Ab yeh field maujood hai
+  
+  // Composite Key theek kiya gaya
+  @@id([recipeId, inventoryId]) // Sahi Hal 2: inventoryId par set kiya
+
+  // Material Details
+  quantityRequired  Float 
+
+  // Relationships
+  recipe            ProductRecipe @relation(fields: [recipeId], references: [id])
+  // Relation mein fields ko theek kiya
+  inventoryItem     Inventory     @relation(fields: [inventoryId], references: [id]) // Sahi Hal 3: references [id] use kiya tha
+}
+
+model ProductionOrder {
+  // Primary Key
+  id          Int      @id @default(autoincrement())
+
+  // Job Identification
+  orderNumber String   @unique // Aapka internal production order number, e.g., PO-2025-001
+  status      String   @default("Pending") // e.g., Pending, In Progress, Completed
+
+  // Time & Quantity
+  targetQty   Int      // Kitni miqdaar banane ka target hai
+  startedAt   DateTime
+  completedAt DateTime?
+  
+  // Relationships (Foreign Keys)
+  machineId   Int
+  machine     Machine @relation(fields: [machineId], references: [id])
+  
+  recipeId    Int
+  recipe      ProductRecipe @relation(fields: [recipeId], references: [id])
+
+  // Linking to Details & Labor
+  actualQtyProduced Float?
+  machineLogs MachineLog[]
+  consumedItems ProductionItem[] // Kaunsa material kharch hua
+  operatorEntries OperatorEntry[] // Kis operator ne kaam kiya
+}
+
+// schema.prisma
+model ProductionItem {
+  id                Int      @id @default(autoincrement())
+
+  // Relationships (Foreign Keys)
+  productionOrderId Int
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+
+  // Foreign Key ko theek kiya, type Int hona chahiye (kyunki Inventory.id Int hai)
+  inventoryId       Int // Sahi Hal 1: Type Int kiya
+  inventoryItem     Inventory @relation(fields: [inventoryId], references: [id]) // Sahi Hal 2: fields [inventoryId] use kiya
+  
+  // Consumption Details
+  quantityConsumed Float
+  wastageQty       Float @default(0)
+}
+model MachineLog {
+  id               Int                @id @default(autoincrement())
+  machineId        Int
+  machine          Machine            @relation(fields: [machineId], references: [id])
+  productionOrderId Int?               
+  productionOrder   ProductionOrder?   @relation(fields: [productionOrderId], references: [id])
+  logDate          DateTime           @default(now())
+  workingHours     Float
+  idleHours        Float
+  downtimeHours    Float
+  downtimeReason   String?
+  actualQtyProduced Float?             
+  wastageQty        Float?    
+  notes            String?   // Optional remarks or shift comments
+         
+  
+  // NEW SHIFT FIELD
+  shift            ShiftType          @default(DAY) 
+}
+
+// ... (Baaki sabhi models aur enum wahi rahenge)
+
+
+// NEW ENUM DEFINITION: Shift Type
+enum ShiftType {
+  DAY
+  NIGHT
+  GENERAL // For logs that don't fit specific shifts, e.g., weekly maintenance
+}
+
+// Daily Operator Work and Labor Costing
+model User {
+  id               Int       @id @default(autoincrement())
+  employeeId       String    @unique
+  name             String
+  role             String    @default("Operator") // e.g., Operator, Supervisor, Admin
+  
+  // Link to entries
+  operatorEntries  OperatorEntry[]
+}
+
+model OperatorEntry {
+  id               Int       @id @default(autoincrement())
+  
+  // Relationships
+  productionOrderId Int
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  operatorId       Int
+  operator         User      @relation(fields: [operatorId], references: [id])
+
+  // Entry details
+  startTime        DateTime
+  endTime          DateTime? // Nullable if still working
+  durationMinutes  Float?    // Calculated field, stored in minutes
+  activityType     String?   // e.g., "Setup", "Production", "Cleanup", "Break"
+  notes            String?
+}
